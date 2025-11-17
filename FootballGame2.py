@@ -260,6 +260,219 @@ def run_avoiding_state(states: States, transitions: Transitions, start_state: st
     # Explored all runs that avoid forbidden_state and never got rem == 0
     return False, []
 
+def has_positive_score_zero_time_cycle(states: States, transitions: Transitions) -> bool:
+    zero_time_states = {s for s, info in states.items() if info["timeleft"] == 0}
+
+    # DFS with path tracking and cumulative score
+    visited: Set[str] = set()
+    stack: Set[str] = set()
+
+    def dfs(s: str, score_acc: int, path: List[str]) -> bool:
+        visited.add(s)
+        stack.add(s)
+        path.append(s)
+
+        for nxt in transitions.get(s, []):
+            if nxt not in zero_time_states:
+                continue
+            new_score = score_acc + states[nxt]["score"]
+
+            if nxt in stack:
+                # Found a cycle: estimate score in this cycle by looking from first occurrence of nxt
+                idx = path.index(nxt)
+                cycle_states = path[idx:] + [nxt]
+                cycle_score = sum(states[u]["score"] for u in cycle_states)
+                if cycle_score > 0:
+                    print("Positive-score zero-time cycle:", " -> ".join(cycle_states), "score:", cycle_score)
+                    return True
+            elif nxt not in visited:
+                if dfs(nxt, new_score, path):
+                    return True
+
+        stack.remove(s)
+        path.pop()
+        return False
+
+    for s in zero_time_states:
+        if s not in visited:
+            if dfs(s, states[s]["score"], []):
+                return True
+
+    return False
+
+def check_monotone_in_time(states: States, transitions: Transitions, start_state: str,
+                           max_time: int, score_on: ScoreOn = "current") -> bool:
+    ok = True
+    prev_score = None
+    for t in range(0, max_time + 1, 30):  # step by 30 seconds, or smaller if you like
+        score, plays, _ = best_score_and_plays(states, transitions, start_state, t, score_on)
+        if prev_score is not None and score < prev_score:
+            ok = False
+        prev_score = score
+    return ok
+
+def find_exact_score_path(
+    states: States,
+    transitions: Transitions,
+    start_state: str,
+    start_time: int,
+    target_score: int,
+    score_on: ScoreOn = "current",
+) -> Tuple[bool, List[str]]:
+    """
+    Returns (is_possible, path) where:
+      - is_possible: True if there exists a complete play sequence whose final
+        score is exactly `target_score` within the given time budget.
+      - path: one such sequence of states (if is_possible is True), otherwise [].
+
+    Timing model (same as best_score_and_plays and find_zero_score_path):
+      - Each time you 'play' a state s, you spend states[s]["timeleft"] time.
+      - If you don't have enough time to spend on a state, the game ends
+        before that state is played.
+
+    Scoring model:
+      - score_on == "current":
+          add states[s]["score"] when you PLAY state s.
+      - score_on == "entering":
+          add states[nxt]["score"] when you ENTER each successor state.
+    """
+
+    # Each queue entry: (state, time_remaining, score_so_far, path_so_far)
+    q: Deque[tuple[str, int, int, List[str]]] = deque()
+    q.append((start_state, start_time, 0, []))
+
+    # To avoid revisiting the exact same (state, time, score) triple
+    visited = set()
+    visited.add((start_state, start_time, 0))
+
+    while q:
+        s, t, score_so_far, path = q.popleft()
+        cost = states[s]["timeleft"]
+
+        # If we don't have enough time to 'play' this state, game ends before s
+        if t < cost:
+            # Terminal game; check if we ended with the desired score
+            if score_so_far == target_score:
+                return True, path  # path represents the sequence actually played
+            continue
+
+        # We can play state s, update score according to the chosen scoring convention
+        if score_on == "current":
+            new_score = score_so_far + states[s]["score"]
+        else:  # score_on == "entering"
+            new_score = score_so_far
+
+        new_t = t - cost
+        new_path = path + [s]
+
+        # If s has no outgoing transitions, the game ends here.
+        if not transitions.get(s):
+            if new_score == target_score:
+                return True, new_path
+            continue
+
+        # Otherwise, continue to successor states
+        for nxt in transitions[s]:
+            if score_on == "entering":
+                next_score = new_score + states[nxt]["score"]
+            else:
+                next_score = new_score
+
+            key = (nxt, new_t, next_score)
+            if key in visited:
+                continue
+            visited.add(key)
+            q.append((nxt, new_t, next_score, new_path))
+
+    # Exhausted all possibilities; no path achieves exactly target_score
+    return False, []
+
+def find_terminal_states(states: States, transitions: Transitions) -> Set[str]:
+    """
+    Terminal states are those with no outgoing transitions.
+    (You can tweak this later if you want a different notion of 'terminal'.)
+    """
+    terminals: Set[str] = set()
+    for s in states.keys():
+        if not transitions.get(s):
+            terminals.add(s)
+    return terminals
+
+
+def can_finish_from_state(
+    states: States,
+    transitions: Transitions,
+    start_state: str,
+    start_time: int,
+    terminal_states: Set[str] | None = None,
+) -> bool:
+    """
+    Returns True iff there exists some run starting from (start_state, start_time)
+    that can 'finish the game', where finishing means:
+
+      - we reach a state with time_left == 0, OR
+      - we reach one of the given terminal_states (e.g., touchdown, etc.)
+
+    BFS over (state, time_left) pairs, using the same time model as the rest
+    of the file: to 'play' a state s you must pay states[s]["timeleft"] time.
+    """
+
+    if terminal_states is None:
+        terminal_states = find_terminal_states(states, transitions)
+
+    # Each queue entry: (state, time_remaining)
+    q: Deque[tuple[str, int]] = deque()
+    visited: Set[tuple[str, int]] = set()
+
+    q.append((start_state, start_time))
+    visited.add((start_state, start_time))
+
+    while q:
+        s, t = q.popleft()
+
+        # Reaching time 0 or a terminal state counts as a successful finish
+        if t == 0 or s in terminal_states:
+            return True
+
+        cost = states[s]["timeleft"]
+
+        # Not enough time to 'play' s again and s is not terminal:
+        # this is a stuck partial game, so we do not expand further.
+        if cost > t:
+            continue
+
+        new_t = t - cost
+        for nxt in transitions.get(s, []):
+            state_time = (nxt, new_t)
+            if state_time not in visited:
+                visited.add(state_time)
+                q.append(state_time)
+
+    # We exhausted all possibilities without ever hitting time 0 or a terminal state.
+    return False
+
+
+def find_bad_dead_end_states(
+    states: States,
+    transitions: Transitions,
+    representative_time: int,
+) -> Set[str]:
+    """
+    For each state s, check whether there exists ANY run starting from (s, representative_time)
+    that can finish the game (time=0 or terminal state).
+
+    If not, s is considered a 'bad dead-end' for that time budget.
+    """
+    terminal_states = find_terminal_states(states, transitions)
+    bad: Set[str] = set()
+
+    for s in states.keys():
+        if not can_finish_from_state(states, transitions, s, representative_time, terminal_states):
+            bad.add(s)
+
+    return bad
+
+
 
 def main():
     states = {
@@ -335,6 +548,48 @@ def main():
         print(" → ".join(path))
     else:
         print(f"No run exists that avoids '{avoid_state}' and ends at time 0.")
+
+    print("################################################")
+    has_cycle = has_positive_score_zero_time_cycle(states, transitions)
+    if has_cycle:
+        print("No cycle of zero-time states that yields positive net points which would mean infinite score in zero time.")
+    else:
+        print("No zero-time/+ score cycle")
+
+    print("################################################")
+
+    time_worse = check_monotone_in_time(states, transitions, start_state, start_time)
+    if time_worse:
+        print("More time doesn't increase score")
+    else:
+        print("Uh-oh - more time could decrease score")
+
+    print("################################################")
+    target = 3
+    possible, path = find_exact_score_path(states, transitions, start_state, start_time, target)
+    if possible:
+        print(f"Exactly {target} points IS reachable.")
+        print("One such sequence:")
+        print(" → ".join(path))
+    else:
+        print(f"Exactly {target} points is NOT reachable in this model.")
+
+    print("################################################")
+    bad_dead_ends = find_bad_dead_end_states(states, transitions, start_time)
+    if bad_dead_ends:
+        print("States that behave as BAD dead-ends (cannot finish the game from them):")
+        for s in sorted(bad_dead_ends):
+            print(f"  - {s}")
+    else:
+        print("No bad dead-end states: from every state we can finish the game.")
+
+    print("################################################")
+    reach_state= "defense"
+    possible, _ = run_avoiding_state(states, transitions, start_state, start_time, reach_state)
+    if not possible:
+        print(f"Any full run must eventually reach {reach_state} (inevitable).")
+    else:
+        print(f"Any full run doesn't necessarily need to reach {reach_state}")
 
 
 if __name__ == "__main__":
