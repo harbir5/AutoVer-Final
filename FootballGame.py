@@ -29,7 +29,7 @@ def next_yardline(current_yard: int, from_state: str, to_state: str) -> int | No
     """
     # New drive after defense or safety: reset to 30
     if from_state in ("defense", "safety") and to_state == "first down":
-        return 30
+        return 70
 
     # Offensive gain of a fresh first down
     if to_state == "first down" and from_state not in ("defense", "safety"):
@@ -42,7 +42,7 @@ def next_yardline(current_yard: int, from_state: str, to_state: str) -> int | No
     return current_yard
 
 
-def best_score_and_plays(states: States, transitions: Transitions, start_state: str, start_time: int, score_on: ScoreOn = "current", start_yardline: int = 30) -> Tuple[float, float, List[str]]:
+def best_score_and_plays(states: States, transitions: Transitions, start_state: str, start_time: int, score_on: ScoreOn = "current", start_yardline: int = 70) -> Tuple[float, float, List[str]]:
     """
     Returns (max_score, max_plays_for_that_score, play_sequence).
     score_on: "current" -> reward from current state; "entering" -> reward from next state
@@ -92,7 +92,7 @@ def best_score_and_plays(states: States, transitions: Transitions, start_state: 
     return dp(start_state, start_time, start_yardline)
 
 
-def max_plays_only(states: States, transitions: Transitions, start_state: str, start_time: int, start_yardline: int = 30) -> int:
+def max_plays_only(states: States, transitions: Transitions, start_state: str, start_time: int, start_yardline: int = 70) -> int:
     """Returns the maximum number of plays reachable within time."""
     @lru_cache(maxsize=None)
     def dp_plays(s: str, t: int, y: int) -> int:
@@ -132,7 +132,7 @@ def check_reachability(transitions: Transitions, initial_state: str, target_stat
     return False
 
 
-def find_zero_score_path(states: States, transitions: Transitions, start_state: str, start_time:int, score_on: ScoreOn = "current", start_yardline: int = 30) -> Tuple[bool, List[str]]:
+def find_zero_score_path(states: States, transitions: Transitions, start_state: str, start_time:int, score_on: ScoreOn = "current", start_yardline: int = 70) -> Tuple[bool, List[str]]:
     """
     Returns (is_possible, path) where:
       - is_possible: True if there exists a complete play sequence whose final score is 0
@@ -247,7 +247,7 @@ def zero_score_possible(states: States, transitions: Transitions, start_state: s
     # without being forced into a scoring state.
     return False
 
-def run_avoiding_state(states: States, transitions: Transitions, start_state: str, start_time: int, forbidden_state: str, start_yardline: int = 30)-> Tuple[bool, List[str]]:
+def run_avoiding_state(states: States, transitions: Transitions, start_state: str, start_time: int, forbidden_state: str, start_yardline: int = 70)-> Tuple[bool, List[str]]:
     """
     Returns (is_possible, path) where:
       - is_possible: True iff there exists a run that:
@@ -395,7 +395,7 @@ def find_exact_score_path(
     start_time: int,
     target_score: int,
     score_on: ScoreOn = "current",
-    start_yardline: int = 30,
+    start_yardline: int = 70,
 ) -> Tuple[bool, List[str]]:
     """
     Returns (is_possible, path) where:
@@ -561,7 +561,7 @@ def main():
         "extra point": {"score": 1, "timeleft": 0},
         "2pt":         {"score": 2, "timeleft": 0},
         "field goal":  {"score": 3, "timeleft": 0},
-        "defense":     {"score": 0, "timeleft": 0},
+        "defense":     {"score": 0, "timeleft": 180},
         "safety":      {"score": 2, "timeleft": 0}
     }
     transitions = {
@@ -573,12 +573,12 @@ def main():
         "extra point": ["defense"],
         "2pt":         ["defense"],
         "field goal":  ["defense"],
-        "defense":     ["first down", "safety"],
+        "defense":     ["first down", "safety", "touchdown"],
         "safety":      ["first down"]
     }
 
     start_state = "first down"
-    start_time = 1800
+    start_time = 3600
 
     print("################################################")
     # Also get the play sequence
