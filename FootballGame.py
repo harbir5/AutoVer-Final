@@ -642,7 +642,7 @@ def main():
         print("Uh-oh - more time could decrease score")
 
     print("################################################")
-    target = 3
+    target = 2
     possible, path = find_exact_score_path(states, transitions, start_state, start_time, target)
     if possible:
         print(f"Exactly {target} points IS reachable.")
