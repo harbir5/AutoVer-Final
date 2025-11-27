@@ -41,6 +41,84 @@ def next_yardline(current_yard: int, from_state: str, to_state: str) -> int | No
     # All other transitions keep the same yard line
     return current_yard
 
+def check_reachability(transitions: Transitions, initial_state: str, target_state: str) -> bool:
+    """ Check reachability of a given state """
+    visited = set()
+    stack = [initial_state]
+    while stack:
+        state = stack.pop()
+        if state == target_state:
+            return True
+        if state not in visited:
+            visited.add(state)
+            stack.extend(transitions.get(state, []))
+    return False
+
+def run_avoiding_state(states: States, transitions: Transitions, start_state: str, start_time: int, forbidden_state: str, start_yardline: int = 70)-> Tuple[bool, List[str]]:
+    """
+    Returns (is_possible, path) where:
+      - is_possible: True iff there exists a run that:
+          * starts in start_state with start_time,
+          * at each step pays states[s]["timeleft"],
+          * never visits forbidden_state,
+          * and ends with exactly 0 time remaining.
+      - path: one such sequence of states (the states actually played), else [].
+    """
+
+    forbidden = {forbidden_state}
+
+    # If the start state itself is forbidden, we can't avoid it.
+    if start_state in forbidden:
+        return False, []
+
+    # Trivial case: no time at all; consider this a valid empty run if you want
+    if start_time == 0:
+        return True, []
+
+    # Queue entries: (current_state, time_left, path_so_far)
+    q: Deque[tuple[str, int, List[str], int]] = deque()
+    q.append((start_state, start_time, [], start_yardline))
+
+    # Avoid revisiting same (state, time_left) pair
+    visited = set()
+    visited.add((start_state, start_time, start_yardline))
+
+    while q:
+        s, t, path, y = q.popleft()
+
+        # If we ever *reach* the forbidden state, discard this branch
+        if s in forbidden:
+            continue
+
+        cost = states[s]["timeleft"]
+        if t < cost:
+            # Can't afford to play this state, so this path doesn't give a valid run
+            continue
+
+        rem = t - cost
+        new_path = path + [s]
+
+        # If we've exactly used up all time, we found a good run
+        if rem == 0:
+            return True, new_path
+
+        # Otherwise, keep exploring successors
+        for nxt in transitions.get(s, []):
+            if nxt in forbidden:
+                continue  # don't even consider enqueuing the forbidden state
+            new_y = next_yardline(y, s, nxt)
+            if new_y is None:
+                # Illegal transition (yardline constraint).
+                continue
+            key = (nxt, rem, new_y)
+            if key in visited:
+                continue
+            visited.add(key)
+            q.append((nxt, rem, new_path, new_y))
+
+    # Explored all runs that avoid forbidden_state and never got rem == 0
+    return False, []
+
 
 def best_score_and_plays(states: States, transitions: Transitions, start_state: str, start_time: int, score_on: ScoreOn = "current", start_yardline: int = 70) -> Tuple[float, float, List[str]]:
     """
@@ -117,19 +195,6 @@ def max_plays_only(states: States, transitions: Transitions, start_state: str, s
         return best
 
     return dp_plays(start_state, start_time, start_yardline)
-
-def check_reachability(transitions: Transitions, initial_state: str, target_state: str) -> bool:
-    """ Check reachability of a given state """
-    visited = set()
-    stack = [initial_state]
-    while stack:
-        state = stack.pop()
-        if state == target_state:
-            return True
-        if state not in visited:
-            visited.add(state)
-            stack.extend(transitions.get(state, []))
-    return False
 
 
 def find_zero_score_path(states: States, transitions: Transitions, start_state: str, start_time:int, score_on: ScoreOn = "current", start_yardline: int = 70) -> Tuple[bool, List[str]]:
@@ -247,69 +312,79 @@ def zero_score_possible(states: States, transitions: Transitions, start_state: s
     # without being forced into a scoring state.
     return False
 
-def run_avoiding_state(states: States, transitions: Transitions, start_state: str, start_time: int, forbidden_state: str, start_yardline: int = 70)-> Tuple[bool, List[str]]:
+def find_exact_score_path(
+    states: States,
+    transitions: Transitions,
+    start_state: str,
+    start_time: int,
+    target_score: int,
+    score_on: ScoreOn = "current",
+    start_yardline: int = 70,
+) -> Tuple[bool, List[str]]:
     """
     Returns (is_possible, path) where:
-      - is_possible: True iff there exists a run that:
-          * starts in start_state with start_time,
-          * at each step pays states[s]["timeleft"],
-          * never visits forbidden_state,
-          * and ends with exactly 0 time remaining.
-      - path: one such sequence of states (the states actually played), else [].
+      - is_possible: True if there exists a complete play sequence whose final
+        score is exactly `target_score` within the given time budget.
+      - path: one such sequence of states (if is_possible is True), otherwise [].
+
+    Timing model (same as best_score_and_plays and find_zero_score_path):
+      - Each time you 'play' a state s, you spend states[s]["timeleft"] time.
+      - If you don't have enough time to spend on a state, the game ends
+        before that state is played.
     """
 
-    forbidden = {forbidden_state}
+    # Each queue entry: (state, time_remaining, score_so_far, path_so_far)
+    q: Deque[tuple[str, int, int, List[str], int]] = deque()
+    q.append((start_state, start_time, 0, [], start_yardline))
 
-    # If the start state itself is forbidden, we can't avoid it.
-    if start_state in forbidden:
-        return False, []
-
-    # Trivial case: no time at all; consider this a valid empty run if you want
-    if start_time == 0:
-        return True, []
-
-    # Queue entries: (current_state, time_left, path_so_far)
-    q: Deque[tuple[str, int, List[str], int]] = deque()
-    q.append((start_state, start_time, [], start_yardline))
-
-    # Avoid revisiting same (state, time_left) pair
+    # To avoid revisiting the exact same (state, time, score) triple
     visited = set()
-    visited.add((start_state, start_time, start_yardline))
+    visited.add((start_state, start_time, 0, start_yardline))
 
     while q:
-        s, t, path, y = q.popleft()
-
-        # If we ever *reach* the forbidden state, discard this branch
-        if s in forbidden:
-            continue
-
+        s, t, score_so_far, path, y = q.popleft()
         cost = states[s]["timeleft"]
+
+        # If we don't have enough time to 'play' this state, game ends before s
         if t < cost:
-            # Can't afford to play this state, so this path doesn't give a valid run
+            # Terminal game; check if we ended with the desired score
+            if score_so_far == target_score:
+                return True, path  # path represents the sequence actually played
             continue
 
-        rem = t - cost
+        # We can play state s, update score according to the chosen scoring convention
+        if score_on == "current":
+            new_score = score_so_far + states[s]["score"]
+        else:  # score_on == "entering"
+            new_score = score_so_far
+
+        new_t = t - cost
         new_path = path + [s]
 
-        # If we've exactly used up all time, we found a good run
-        if rem == 0:
-            return True, new_path
+        # If s has no outgoing transitions, the game ends here.
+        if not transitions.get(s):
+            if new_score == target_score:
+                return True, new_path
+            continue
 
-        # Otherwise, keep exploring successors
-        for nxt in transitions.get(s, []):
-            if nxt in forbidden:
-                continue  # don't even consider enqueuing the forbidden state
+        # Otherwise, continue to successor states
+        for nxt in transitions[s]:
             new_y = next_yardline(y, s, nxt)
             if new_y is None:
-                # Illegal transition (yardline constraint).
                 continue
-            key = (nxt, rem, new_y)
+
+            if score_on == "entering":
+                next_score = new_score + states[nxt]["score"]
+            else:
+                next_score = new_score
+
+            key = (nxt, new_t, next_score, new_y)
             if key in visited:
                 continue
             visited.add(key)
-            q.append((nxt, rem, new_path, new_y))
+            q.append((nxt, new_t, next_score, new_path, new_y))
 
-    # Explored all runs that avoid forbidden_state and never got rem == 0
+    # Exhausted all possibilities; no path achieves exactly target_score
     return False, []
 
 def has_positive_score_zero_time_cycle(states: States, transitions: Transitions) -> bool:
@@ -388,80 +463,6 @@ def check_monotone_in_time(states: States, transitions: Transitions, start_state
         prev_score = score
     return ok
 
-def find_exact_score_path(
-    states: States,
-    transitions: Transitions,
-    start_state: str,
-    start_time: int,
-    target_score: int,
-    score_on: ScoreOn = "current",
-    start_yardline: int = 70,
-) -> Tuple[bool, List[str]]:
-    """
-    Returns (is_possible, path) where:
-      - is_possible: True if there exists a complete play sequence whose final
-        score is exactly `target_score` within the given time budget.
-      - path: one such sequence of states (if is_possible is True), otherwise [].
-
-    Timing model (same as best_score_and_plays and find_zero_score_path):
-      - Each time you 'play' a state s, you spend states[s]["timeleft"] time.
-      - If you don't have enough time to spend on a state, the game ends
-        before that state is played.
-    """
-
-    # Each queue entry: (state, time_remaining, score_so_far, path_so_far)
-    q: Deque[tuple[str, int, int, List[str], int]] = deque()
-    q.append((start_state, start_time, 0, [], start_yardline))
-
-    # To avoid revisiting the exact same (state, time, score) triple
-    visited = set()
-    visited.add((start_state, start_time, 0, start_yardline))
-
-    while q:
-        s, t, score_so_far, path, y = q.popleft()
-        cost = states[s]["timeleft"]
-
-        # If we don't have enough time to 'play' this state, game ends before s
-        if t < cost:
-            # Terminal game; check if we ended with the desired score
-            if score_so_far == target_score:
-                return True, path  # path represents the sequence actually played
-            continue
-
-        # We can play state s, update score according to the chosen scoring convention
-        if score_on == "current":
-            new_score = score_so_far + states[s]["score"]
-        else:  # score_on == "entering"
-            new_score = score_so_far
-
-        new_t = t - cost
-        new_path = path + [s]
-
-        # If s has no outgoing transitions, the game ends here.
-        if not transitions.get(s):
-            if new_score == target_score:
-                return True, new_path
-            continue
-
-        # Otherwise, continue to successor states
-        for nxt in transitions[s]:
-            new_y = next_yardline(y, s, nxt)
-            if new_y is None:
-                continue
-
-            if score_on == "entering":
-                next_score = new_score + states[nxt]["score"]
-            else:
-                next_score = new_score
-
-            key = (nxt, new_t, next_score, new_y)
-            if key in visited:
-                continue
-            visited.add(key)
-            q.append((nxt, new_t, next_score, new_path, new_y))
-
-    # Exhausted all possibilities; no path achieves exactly target_score
-    return False, []
 
 def find_terminal_states(states: States, transitions: Transitions) -> Set[str]:
     """ Terminal states are those with no outgoing transitions. """
@@ -581,6 +582,26 @@ def main():
     start_time = 3600
 
     print("################################################")
+
+    reachable = check_reachability(transitions, start_state, "first down") and check_reachability(transitions, start_state, "second down") and check_reachability(transitions, start_state, "third down") and check_reachability(transitions, start_state, "fourth down") and check_reachability(transitions, start_state, "touchdown") and check_reachability(transitions, start_state, "extra point") and check_reachability(transitions, start_state, "2pt") and check_reachability(transitions, start_state, "field goal") and check_reachability(transitions, start_state, "defense") and check_reachability(transitions, start_state, "safety")
+    print("Reachability of all states:", reachable)
+
+    print("################################################")
+
+    avoid_state = "defense"
+    possible, path = run_avoiding_state(
+        states, transitions, start_state, start_time, avoid_state
+    )
+    if possible:
+        print(f"There IS a run that avoids '{avoid_state}' and ends at time 0.")
+        print("One such run:")
+        print(" → ".join(path))
+    else:
+        print(f"No run exists that avoids '{avoid_state}' and ends at time 0.")
+
+    print("################################################")
+
+
     # Also get the play sequence
     best_score, plays_for_best, play_seq = best_score_and_plays(
         states, transitions, start_state, start_time, score_on="current"
@@ -592,10 +613,6 @@ def main():
     print("################################################")
     longest = max_plays_only(states, transitions, start_state, start_time)
     print("Absolute max plays (ignore score):", longest)
-
-    print("################################################")
-    reachable = check_reachability(transitions, start_state, "first down") and check_reachability(transitions, start_state, "second down") and check_reachability(transitions, start_state, "third down") and check_reachability(transitions, start_state, "fourth down") and check_reachability(transitions, start_state, "touchdown") and check_reachability(transitions, start_state, "extra point") and check_reachability(transitions, start_state, "2pt") and check_reachability(transitions, start_state, "field goal") and check_reachability(transitions, start_state, "defense") and check_reachability(transitions, start_state, "safety")
-    print("Reachability of all states:", reachable)
 
     print("################################################")
     possible, zero_path = find_zero_score_path(
@@ -615,16 +632,14 @@ def main():
         print("A 0-score outcome is NOT possible in this model.")
 
     print("################################################")
-    avoid_state = "fourth down"
-    possible, path = run_avoiding_state(
-        states, transitions, start_state, start_time, avoid_state
-    )
+    target = 1
+    possible, path = find_exact_score_path(states, transitions, start_state, start_time, target)
     if possible:
-        print(f"There IS a run that avoids '{avoid_state}' and ends at time 0.")
-        print("One such run:")
+        print(f"Exactly {target} points IS reachable.")
+        print("One such sequence:")
         print(" → ".join(path))
     else:
-        print(f"No run exists that avoids '{avoid_state}' and ends at time 0.")
+        print(f"Exactly {target} points is NOT reachable in this model.")
 
     print("################################################")
     has_cycle = has_positive_score_zero_time_cycle(states, transitions)
@@ -641,15 +656,6 @@ def main():
     else:
         print("Uh-oh - more time could decrease score")
 
-    print("################################################")
-    target = 2
-    possible, path = find_exact_score_path(states, transitions, start_state, start_time, target)
-    if possible:
-        print(f"Exactly {target} points IS reachable.")
-        print("One such sequence:")
-        print(" → ".join(path))
-    else:
-        print(f"Exactly {target} points is NOT reachable in this model.")
 
     print("################################################")
     bad_dead_ends = find_bad_dead_end_states(states, transitions, start_time)
@@ -660,13 +666,7 @@ def main():
     else:
         print("No bad dead-end states: from every state we can finish the game.")
 
-    print("################################################")
-    reach_state= "defense"
-    possible, _ = run_avoiding_state(states, transitions, start_state, start_time, reach_state)
-    if not possible:
-        print(f"Any full run must eventually reach {reach_state} (inevitable).")
-    else:
-        print(f"Any full run doesn't necessarily need to reach {reach_state}")
+
 
 
 if __name__ == "__main__":
